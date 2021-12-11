@@ -1,5 +1,10 @@
  /******************************************************************************
-SparkFun_RV8803.h
+RV8803_ESP32.h
+RV8803 ESP32 Library
+
+Derived from:
+
+SparkFun_RV8803.cpp
 RV8803 Arduino Library
 Andy England @ SparkFun Electronics
 March 3, 2020
@@ -14,8 +19,10 @@ or concerns with licensing, please contact techsupport@sparkfun.com.
 Distributed as-is; no warranty is given.
 ******************************************************************************/
 
-#include <time.h>
-#include "SparkFun_RV8803.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include <math.h>
+#include "RV8803_ESP32.h"
 
 //****************************************************************************//
 //
@@ -65,22 +72,20 @@ BUILD_MONTH_OCT | BUILD_MONTH_NOV | BUILD_MONTH_DEC
 #define BUILD_SECOND_1 (__TIME__[7] - 0x30)
 #define BUILD_SECOND ((BUILD_SECOND_0 * 10) + BUILD_SECOND_1)
 
-RV8803::RV8803( void )
+RV8803::RV8803( i2c_port_t _i2c_num, uint8_t _i2c_addr)
 {
-
+	i2c_num = _i2c_num;
+	i2c_addr = _i2c_addr;
 }
 
-bool RV8803::begin(TwoWire &wirePort)
+bool RV8803::begin(void)
 {
-	_i2cPort = &wirePort;
+	esp_err_t ret;
+	uint8_t data;
 	
-	_i2cPort->beginTransmission(RV8803_ADDR);
-	
-	if (_i2cPort->endTransmission() != 0)
-	{
-		return (false); //Error: Sensor did not ack
-	}
-	return(true);
+    ret = i2c_master_write_to_device(i2c_num, i2c_addr, &data, 0, 1000 / portTICK_RATE_MS);
+
+    return (ret == ESP_OK);
 }
 
 //Configures the microcontroller to convert to 12 hour mode.
@@ -242,16 +247,18 @@ bool RV8803::setEpoch(uint32_t value, bool use1970sEpoch)
 		value -= 946710000;
 	}
 
-	time_t t = value;
-	struct tm* tmp = gmtime(&t);
+	const time_t t = value;
+	struct tm tmp;
 
-	_time[TIME_SECONDS] = DECtoBCD(tmp->tm_sec);
-	_time[TIME_MINUTES] = DECtoBCD(tmp->tm_min);
-	_time[TIME_HOURS] = DECtoBCD(tmp->tm_hour);
-	_time[TIME_DATE] = DECtoBCD(tmp->tm_mday);
-	_time[TIME_WEEKDAY] = 1 << tmp->tm_wday;
-	_time[TIME_MONTH] = DECtoBCD(tmp->tm_mon + 1);
-	_time[TIME_YEAR] = DECtoBCD(tmp->tm_year - 100);
+	gmtime_r(&t, &tmp);
+
+	_time[TIME_SECONDS] = DECtoBCD(tmp.tm_sec);
+	_time[TIME_MINUTES] = DECtoBCD(tmp.tm_min);
+	_time[TIME_HOURS] = DECtoBCD(tmp.tm_hour);
+	_time[TIME_DATE] = DECtoBCD(tmp.tm_mday);
+	_time[TIME_WEEKDAY] = 1 << tmp.tm_wday;
+	_time[TIME_MONTH] = DECtoBCD(tmp.tm_mon + 1);
+	_time[TIME_YEAR] = DECtoBCD(tmp.tm_year - 100);
 		
 	return setTime(_time, TIME_ARRAY_LENGTH); //Subtract one as we don't write to the hundredths register
 }
@@ -269,6 +276,83 @@ bool RV8803::setTime(uint8_t sec, uint8_t min, uint8_t hour, uint8_t weekday, ui
 		
 	return setTime(_time, TIME_ARRAY_LENGTH); //Subtract one as we don't write to the hundredths register
 }
+
+//Set time and date/day registers of RV8803
+bool RV8803::setTime(struct tm *tm)
+{
+	return setTime(tm->tm_sec, tm->tm_min, tm->tm_hour, tm->tm_wday, tm->tm_mday, tm->tm_mon + 1, tm->tm_year - 100);
+}
+
+bool RV8803::setTime(struct timeval *tv)
+{
+	return setEpoch((int32_t)tv->tv_sec, false);
+}
+
+int get_utc_offset() {
+
+  time_t zero = 24*60*60L;
+  struct tm timeptr;
+  int gmtime_hours;
+
+  /* get the local time for Jan 2, 1900 00:00 UTC */
+  localtime_r( &zero, &timeptr );
+  gmtime_hours = timeptr.tm_hour;
+
+  /* if the local time is the "day before" the UTC, subtract 24 hours
+    from the hours to get the UTC offset */
+  if( timeptr.tm_mday < 2 )
+    gmtime_hours -= 24;
+
+  return gmtime_hours;
+
+}
+
+/*
+  the utc analogue of mktime,
+  (much like timegm on some systems)
+*/
+time_t tm_to_time_t_utc( struct tm * timeptr ) {
+
+  /* gets the epoch time relative to the local time zone,
+  and then adds the appropriate number of seconds to make it UTC */
+  return mktime( timeptr ) + get_utc_offset() * 3600;
+
+}
+bool RV8803::getTm(struct tm *tm, uint32_t *p_usec = NULL)
+{
+	bool rc = updateTime();
+	if (!rc) {
+		return rc;
+	}
+	if (p_usec) {
+		*p_usec = BCDtoDEC(_time[TIME_HUNDREDTHS]) * 10000;
+	}
+	tm->tm_isdst = -1;
+	tm->tm_yday = 0;
+	tm->tm_wday = 0;
+	tm->tm_sec = BCDtoDEC(_time[TIME_SECONDS]);
+	tm->tm_min = BCDtoDEC(_time[TIME_MINUTES]);
+	tm->tm_hour = BCDtoDEC(_time[TIME_HOURS]);
+	tm->tm_mday = BCDtoDEC(_time[TIME_DATE]);
+	tm->tm_mon = BCDtoDEC(_time[TIME_MONTH]) - 1;
+	tm->tm_year = BCDtoDEC(_time[TIME_YEAR]) + 100;
+
+	return rc;
+}
+
+bool RV8803::getTimeval(struct timeval *tv)
+{
+	struct tm tmp;
+	uint32_t usec;
+	bool rc = getTm(&tmp, &usec);
+	if (!rc) {
+		return rc;
+	}
+	tv->tv_sec = tm_to_time_t_utc(&tmp);
+	tv->tv_usec = usec;
+	return rc;
+}
+
 
 //Set time and date/day registers of RV8803 (using data array)
 bool RV8803::setTime(uint8_t * time, uint8_t len = 8)
@@ -716,57 +800,42 @@ bool RV8803::writeBit(uint8_t regAddr, uint8_t bitAddr, uint8_t bitToWrite) //If
 	return writeRegister(regAddr, value);
 }
 
-uint8_t RV8803::readRegister(uint8_t addr)
+uint8_t RV8803::readRegister(uint8_t reg_num)
 {
-	_i2cPort->beginTransmission(RV8803_ADDR);
-	_i2cPort->write(addr);
-	_i2cPort->endTransmission();
+	uint8_t dest = 0;
+	esp_err_t ret;
 
-	//typecasting the 1 parameter in requestFrom so that the compiler
-	//doesn't give us a warning about multiple candidates
-	if (_i2cPort->requestFrom(static_cast<uint8_t>(RV8803_ADDR), static_cast<uint8_t>(1)) != 0)
-	{
-		return _i2cPort->read();
-	}
-	return false;
-}
-
-bool RV8803::writeRegister(uint8_t addr, uint8_t val)
-{
-	_i2cPort->beginTransmission(RV8803_ADDR);
-	_i2cPort->write(addr);
-	_i2cPort->write(val);
-	if (_i2cPort->endTransmission() != 0)
-		return (false); //Error: Sensor did not ack
-	return(true);
-}
-
-bool RV8803::writeMultipleRegisters(uint8_t addr, uint8_t * values, uint8_t len)
-{
-	_i2cPort->beginTransmission(RV8803_ADDR);
-	_i2cPort->write(addr);
-	for (uint8_t i = 0; i < len; i++)
-	{
-		_i2cPort->write(values[i]);
+	ret = i2c_master_write_read_device(i2c_num, i2c_addr, &reg_num, 1, &dest, 1, 1000 / portTICK_RATE_MS);
+	if (ret != ESP_OK) {
+		ESP_LOGE("RV8803", "readRegister(%hhu) failed: %s", reg_num, esp_err_to_name(ret));
 	}
 
-	if (_i2cPort->endTransmission() != 0)
-		return (false); //Error: Sensor did not ack
-	return(true);
+	return dest;
 }
 
-bool RV8803::readMultipleRegisters(uint8_t addr, uint8_t * dest, uint8_t len)
+bool RV8803::readMultipleRegisters(uint8_t reg_num, uint8_t * dest, uint8_t len)
 {
-	_i2cPort->beginTransmission(RV8803_ADDR);
-	_i2cPort->write(addr);
-	if (_i2cPort->endTransmission() != 0)
-		return (false); //Error: Sensor did not ack
+	esp_err_t ret;
 
-	_i2cPort->requestFrom(static_cast<uint8_t>(RV8803_ADDR), len);
-	for (uint8_t i = 0; i < len; i++)
-	{
-		dest[i] = _i2cPort->read();
-	}
-	
-	return(true);
+	ret = i2c_master_write_read_device(i2c_num, i2c_addr, &reg_num, 1, dest, len, 1000 / portTICK_RATE_MS);
+
+	return (ret == ESP_OK);
+}
+
+bool RV8803::writeMultipleRegisters(uint8_t reg_num, uint8_t * values, uint8_t len)
+{
+
+	esp_err_t ret;
+    uint8_t write_buf[len + 1];
+    write_buf[0] = reg_num;
+    memcpy(write_buf + 1, values, len);
+    ret = i2c_master_write_to_device(i2c_num, i2c_addr, write_buf, len + 1, 1000 / portTICK_RATE_MS);
+
+    return (ret == ESP_OK);
+
+}
+
+bool RV8803::writeRegister(uint8_t reg_num, uint8_t val)
+{
+    return writeMultipleRegisters(reg_num, &val, 1);
 }

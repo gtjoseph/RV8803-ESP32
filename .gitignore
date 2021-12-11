@@ -52,3 +52,8 @@ eagle.epf
 
 # VS Code c_cpp properties
 .vscode/c_cpp_properties.json
+**/build/
+**/.project
+**/.cproject
+**/.settings
+

@@ -1,32 +1,28 @@
 /******************************************************************************
-SparkFun_RV8803.h
+RV8803_ESP32.h
+RV8803 ESP32 Library
+
+Derived from:
+
 RV8803 Arduino Library
 Andy England @ SparkFun Electronics
 March 3, 2020
 https://github.com/sparkfun/Qwiic_RTC
-
-Resources:
-Uses Wire.h for i2c operation
-Uses SPI.h for SPI operation
-
-Development environment specifics:
-Arduino IDE 1.6.4
 
 This code is released under the [MIT License](http://opensource.org/licenses/MIT).
 Please review the LICENSE.md file included with this example. If you have any questions 
 or concerns with licensing, please contact techsupport@sparkfun.com.
 Distributed as-is; no warranty is given.
 ******************************************************************************/
+#ifndef RV8803_h
+#define RV8803_h
 
-#pragma once
+#include <time.h>
+#include <string.h>
+#include "stdint.h"
 
-#if (ARDUINO >= 100)
-#include "Arduino.h"
-#else
-#include "WProgram.h"
-#endif
+#include "driver/i2c.h"
 
-#include <Wire.h>
 
 //The 7-bit I2C address of the RV8803
 #define RV8803_ADDR							0x32
@@ -141,9 +137,9 @@ class RV8803
 {
 public:
 	
-	RV8803( void );
+	RV8803(i2c_port_t i2c_num, uint8_t i2c_addr);
 
-	bool begin(TwoWire &wirePort = Wire);
+	bool begin(void);
 	
 	void set12Hour();
 	void set24Hour();
@@ -163,7 +159,10 @@ public:
 		
 	bool setTime(uint8_t sec, uint8_t min, uint8_t hour, uint8_t weekday, uint8_t date, uint8_t month, uint16_t year);
 	bool setTime(uint8_t * time, uint8_t len);
-	bool setEpoch(uint32_t value, bool use1970sEpoch = true);
+	bool setEpoch(uint32_t value, bool use1970sEpoch = false);
+	bool setTime(struct tm *tm);
+	bool setTime(struct timeval *tv);
+
 	bool setHundredthsToZero();
 	bool setSeconds(uint8_t value);
 	bool setMinutes(uint8_t value);
@@ -183,11 +182,15 @@ public:
 	uint8_t getWeekday();
 	uint8_t getMonth();
 	uint16_t getYear();	
-	uint32_t getEpoch(bool use1970sEpoch = true);
+	uint32_t getEpoch(bool use1970sEpoch = false);
 	
 	uint8_t getHundredthsCapture();
 	uint8_t getSecondsCapture();
 	
+	bool getTm(struct tm *tm, uint32_t *p_usec);
+	bool getTimeval(struct timeval *tv);
+
+
 	bool setToCompilerTime(); //Uses the hours, mins, etc from compile time to set RTC
 	
 	bool setCalibrationOffset(float ppm);
@@ -252,5 +255,7 @@ public:
   private:
 	uint8_t _time[TIME_ARRAY_LENGTH];
 	bool _isTwelveHour = true;
-	TwoWire *_i2cPort;
+	i2c_port_t i2c_num;
+	uint8_t i2c_addr;
 };
+#endif
